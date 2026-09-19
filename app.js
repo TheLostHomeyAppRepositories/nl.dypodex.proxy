@@ -17,128 +17,110 @@ class WebProxyApp extends Homey.App {
     this.requestCounter = 0;
 
     this.log('WebSocket manager initialized');
-    try {
-      const { randomUUID } = require('crypto');
-      let id = this.homey.settings.get('id');
-      if (!id) {
-        id = randomUUID();
-        this.homey.settings.set('id', id);
-      }
-      await axios.post('https://homey-apps-telemetry.vercel.app/api/installations', {
-        id: id,
-        appId: "nl.dypodex.proxy",
-        homeyPlatform: this.homey.platformVersion ? this.homey.platformVersion : 1,
-        appVersion: this.manifest.version,
-      }).catch(error => {
-        this.error('Error sending telemetry data:', error.message);
-      });
-    } catch (error) {
-      this.error('Error in onInit:', error.message);
-    }
   }
 
   async webRequest(params) {
-  const { url, method = 'GET', headers = {}, data = null, maxRedirects = 5 } = params;
+    const { url, method = 'GET', headers = {}, data = null, maxRedirects = 5 } = params;
 
-  const requestId = ++this.requestCounter;
-  const startTime = Date.now();
+    const requestId = ++this.requestCounter;
+    const startTime = Date.now();
 
-  this.log(`[HTTP ${requestId}] Request start`, {
-    method,
-    url,
-    headers,
-    hasBody: !!data,
-    bodyLength: data ? (typeof data === 'string' ? Buffer.byteLength(data) : data.length) : 0
-  });
-
-  try {
-    // Extract domain for cookie storage
-    const urlObj = new URL(url);
-    const domain = urlObj.hostname;
-
-    // Get stored cookies for this domain
-    const storedCookies = this.cookieJar.get(domain) || [];
-    
-    // Build Cookie header from stored cookies
-    const validCookies = storedCookies.filter(cookie => {
-      // Check if cookie is expired
-      if (cookie.expires && new Date(cookie.expires) < new Date()) {
-        return false;
-      }
-      // Check if path matches
-      if (cookie.path && !urlObj.pathname.startsWith(cookie.path)) {
-        return false;
-      }
-      return true;
-    });
-
-    if (validCookies.length > 0) {
-      const cookieHeader = validCookies.map(c => `${c.name}=${c.value}`).join('; ');
-      headers['cookie'] = cookieHeader;
-      this.log(`[HTTP ${requestId}] Sending cookies:`, cookieHeader);
-    }
-
-    const response = await axios({
-      url,
+    this.log(`[HTTP ${requestId}] Request start`, {
       method,
+      url,
       headers,
-      data,
-      maxRedirects,
-      responseType: 'arraybuffer',
-      validateStatus: () => true,
-      timeout: 30000
+      hasBody: !!data,
+      bodyLength: data ? (typeof data === 'string' ? Buffer.byteLength(data) : data.length) : 0
     });
 
-    // Parse and store Set-Cookie headers
-    const setCookieHeaders = response.headers['set-cookie'];
-    if (setCookieHeaders && setCookieHeaders.length > 0) {
-      this.log(`[HTTP ${requestId}] Received Set-Cookie headers:`, setCookieHeaders);
+    try {
+      // Extract domain for cookie storage
+      const urlObj = new URL(url);
+      const domain = urlObj.hostname;
+
+      // Get stored cookies for this domain
+      const storedCookies = this.cookieJar.get(domain) || [];
       
-      const currentCookies = this.cookieJar.get(domain) || [];
-      
-      setCookieHeaders.forEach(cookieStr => {
-        const parsed = this._parseCookie(cookieStr);
-        if (parsed) {
-          // Remove existing cookie with same name
-          const index = currentCookies.findIndex(c => c.name === parsed.name);
-          if (index !== -1) {
-            currentCookies.splice(index, 1);
-          }
-          // Add new cookie
-          currentCookies.push(parsed);
+      // Build Cookie header from stored cookies
+      const validCookies = storedCookies.filter(cookie => {
+        // Check if cookie is expired
+        if (cookie.expires && new Date(cookie.expires) < new Date()) {
+          return false;
         }
+        // Check if path matches
+        if (cookie.path && !urlObj.pathname.startsWith(cookie.path)) {
+          return false;
+        }
+        return true;
       });
-      
-      this.cookieJar.set(domain, currentCookies);
-      this.log(`[HTTP ${requestId}] Stored ${currentCookies.length} cookies for ${domain}`);
+
+      if (validCookies.length > 0) {
+        const cookieHeader = validCookies.map(c => `${c.name}=${c.value}`).join('; ');
+        headers['cookie'] = cookieHeader;
+        this.log(`[HTTP ${requestId}] Sending cookies:`, cookieHeader);
+      }
+
+      const response = await axios({
+        url,
+        method,
+        headers,
+        data,
+        maxRedirects,
+        responseType: 'arraybuffer',
+        validateStatus: () => true,
+        timeout: 30000
+      });
+
+      // Parse and store Set-Cookie headers
+      const setCookieHeaders = response.headers['set-cookie'];
+      if (setCookieHeaders && setCookieHeaders.length > 0) {
+        this.log(`[HTTP ${requestId}] Received Set-Cookie headers:`, setCookieHeaders);
+        
+        const currentCookies = this.cookieJar.get(domain) || [];
+        
+        setCookieHeaders.forEach(cookieStr => {
+          const parsed = this._parseCookie(cookieStr);
+          if (parsed) {
+            // Remove existing cookie with same name
+            const index = currentCookies.findIndex(c => c.name === parsed.name);
+            if (index !== -1) {
+              currentCookies.splice(index, 1);
+            }
+            // Add new cookie
+            currentCookies.push(parsed);
+          }
+        });
+        
+        this.cookieJar.set(domain, currentCookies);
+        this.log(`[HTTP ${requestId}] Stored ${currentCookies.length} cookies for ${domain}`);
+      }
+
+      const buffer = Buffer.from(response.data);
+      const base64Data = buffer.toString('base64');
+      const durationMs = Date.now() - startTime;
+
+      this.log(`[HTTP ${requestId}] Request completed`, {
+        durationMs,
+        statusCode: response.status,
+        responseBytes: buffer.length,
+        base64Length: base64Data.length
+      });
+
+      return {
+        success: true,
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+        contentType: response.headers['content-type'],
+        data: base64Data
+      };
+
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      this.error(`[HTTP ${requestId}] Request error after ${durationMs} ms`, error.message);
+      throw error;
     }
-
-    const buffer = Buffer.from(response.data);
-    const base64Data = buffer.toString('base64');
-    const durationMs = Date.now() - startTime;
-
-    this.log(`[HTTP ${requestId}] Request completed`, {
-      durationMs,
-      statusCode: response.status,
-      responseBytes: buffer.length,
-      base64Length: base64Data.length
-    });
-
-    return {
-      success: true,
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-      contentType: response.headers['content-type'],
-      data: base64Data
-    };
-
-  } catch (error) {
-    const durationMs = Date.now() - startTime;
-    this.error(`[HTTP ${requestId}] Request error after ${durationMs} ms`, error.message);
-    throw error;
   }
-}
 
 _parseCookie(cookieStr) {
   try {
