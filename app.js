@@ -3,6 +3,7 @@
 const Homey = require('homey');
 const axios = require('axios');
 const WebSocket = require('ws');
+const HomeyPush = require('./lib/push');
 
 class WebProxyApp extends Homey.App {
   async onInit() {
@@ -15,6 +16,9 @@ class WebProxyApp extends Homey.App {
 
     // Simple incremental request counter
     this.requestCounter = 0;
+
+    this.push = new HomeyPush(this);
+    await this.push.startPush();
 
     this.log('WebSocket manager initialized');
   }
@@ -286,6 +290,9 @@ _parseCookie(cookieStr) {
       }
     }
     this.websockets.clear();
+    if (this.push) {
+      this.push.stopPush();
+    }
   }
 }
 
